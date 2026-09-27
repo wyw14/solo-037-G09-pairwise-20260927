@@ -8,6 +8,7 @@ type Operation struct {
     ModelName string `json:"model_name"`
     Section string `json:"section"`
     Carriage string `json:"carriage"`
+    Conditions Conditions `json:"conditions"`
     Stage RunStage `json:"stage"`
     Revision RevisionID `json:"revision"`
     CreatedAt time.Time `json:"created_at"`
@@ -27,6 +28,13 @@ func NewOperation(name string, modelName string, section string, carriage string
         CreatedAt: now,
         UpdatedAt: now,
     }
+}
+
+// WithConditions attaches the physical tow conditions. Conditions are fixed
+// when the measured run is created; UpdatedAt is deliberately left untouched.
+func (o Operation) WithConditions(conditions Conditions) Operation {
+    o.Conditions = conditions.Normalized()
+    return o
 }
 
 func (o Operation) Advance(to RunStage, at time.Time) (Operation, error) {

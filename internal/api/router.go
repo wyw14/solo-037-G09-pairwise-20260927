@@ -15,6 +15,7 @@ type Dependencies interface {
 	Interlocks() any
 	Incidents() any
 	MeasurementService
+	GroupService
 }
 
 type Router struct{ dependencies Dependencies }
@@ -33,6 +34,10 @@ func (r *Router) Handler() http.Handler {
 	router.Get("/api/measured-runs/{id}", r.measuredRun)
 	router.Post("/api/measured-runs/{id}/evidence", r.recordMeasurement)
 	router.Get("/api/measured-runs/{id}/analysis", r.measurementAnalysis)
+	router.Get("/api/trial-groups", r.trialGroups)
+	router.Post("/api/trial-groups", r.createTrialGroup)
+	router.Get("/api/trial-groups/{id}", r.trialGroup)
+	router.Get("/api/trial-groups/{id}/consistency", r.groupConsistency)
 	tests := TestHandler{Service: r.dependencies}
 	router.Post("/api/operations", tests.Create)
 	router.Post("/api/abort", tests.Abort)
@@ -40,6 +45,7 @@ func (r *Router) Handler() http.Handler {
 	router.Get("/equipment", r.equipmentPage)
 	router.Get("/interlocks", r.interlocksPage)
 	router.Get("/incidents", r.incidentsPage)
+	router.Get("/trial-groups", r.trialGroupsPage)
 	return router
 }
 
@@ -75,4 +81,7 @@ func (r *Router) interlocksPage(w http.ResponseWriter, request *http.Request) {
 }
 func (r *Router) incidentsPage(w http.ResponseWriter, request *http.Request) {
 	http.ServeFile(w, request, "web/incidents.html")
+}
+func (r *Router) trialGroupsPage(w http.ResponseWriter, request *http.Request) {
+	http.ServeFile(w, request, "web/trial-groups.html")
 }

@@ -14,7 +14,13 @@ func TestOperatorMeasurementsPersistAndAnalyzeSuppliedValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := a.Create("test A", "hull X", "section-a", "carriage-1")
+	run, err := a.Create(CreateRunInput{
+		Name:       "test A",
+		ModelName:  "hull X",
+		Section:    "section-a",
+		Carriage:   "carriage-1",
+		Conditions: model.Conditions{TowSpeed: 1.2, WaveCondition: "calm", Loading: "draft-0.3"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,8 +45,31 @@ func TestOperatorMeasurementsPersistAndAnalyzeSuppliedValues(t *testing.T) {
 	if analysis.Wave.Count != 2 || math.Abs(analysis.Wave.Mean-0.2) > 1e-9 || analysis.ForceCount != 1 || analysis.ForceMean != 12 {
 		t.Fatalf("analysis did not reflect supplied values after reload: %+v", analysis)
 	}
+	if !loaded.List()[0].Operation.Conditions.Configured() ||
+		loaded.List()[0].Operation.Conditions.TowSpeed != 1.2 ||
+		loaded.List()[0].Operation.Conditions.WaveCondition != "calm" {
+		t.Fatalf("conditions did not persist after reload: %+v", loaded.List()[0].Operation.Conditions)
+	}
 	if len(loaded.List()) != 1 || len(loaded.List()[0].Evidence) != 3 || !loaded.List()[0].Evidence[0].Durable {
 		t.Fatalf("persisted evidence missing: %+v", loaded.List())
+	}
+}
+
+func TestCreateRunConditionsOptionalButNotPartial(t *testing.T) {
+	a, err := OpenMeasurementArchive(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No conditions at all is allowed (legacy/blank set-up).
+	if _, err := a.Create(CreateRunInput{Name: "blank", ModelName: "hull", Section: "s", Carriage: "c"}); err != nil {
+		t.Fatalf("run without conditions rejected: %v", err)
+	}
+	partial := CreateRunInput{Name: "partial", ModelName: "hull", Section: "s", Carriage: "c", Conditions: model.Conditions{TowSpeed: 1.2}}
+	if _, err := a.Create(partial); err == nil {
+		t.Fatal("partially supplied conditions accepted")
+	}
+	if len(a.List()) != 1 {
+		t.Fatal("rejected create must not be stored")
 	}
 }
 
@@ -49,7 +78,7 @@ func TestOperatorMeasurementRejectsInvalidAndUnknownRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := a.Create("test B", "hull X", "section-a", "carriage-1")
+	run, err := a.Create(CreateRunInput{Name: "test B", ModelName: "hull X", Section: "section-a", Carriage: "carriage-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

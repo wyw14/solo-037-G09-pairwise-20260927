@@ -15,23 +15,29 @@ type Runtime struct {
 	operations   map[model.RunID]model.Operation
 	incidents    []model.Incident
 	Measurements *MeasurementArchive
+	Groups       *GroupArchive
 }
 
 func NewRuntime() *Runtime {
-	archive, _ := OpenMeasurementArchive("")
-	return newRuntime(archive)
+	measurements, _ := OpenMeasurementArchive("")
+	groups, _ := OpenGroupArchive("")
+	return newRuntime(measurements, groups)
 }
 
 func OpenRuntime(directory string) (*Runtime, error) {
-	archive, err := OpenMeasurementArchive(directory)
+	measurements, err := OpenMeasurementArchive(directory)
 	if err != nil {
 		return nil, err
 	}
-	return newRuntime(archive), nil
+	groups, err := OpenGroupArchive(directory)
+	if err != nil {
+		return nil, err
+	}
+	return newRuntime(measurements, groups), nil
 }
 
-func newRuntime(archive *MeasurementArchive) *Runtime {
-	runtime := &Runtime{started: time.Now().UTC(), operations: make(map[model.RunID]model.Operation), Measurements: archive}
+func newRuntime(measurements *MeasurementArchive, groups *GroupArchive) *Runtime {
+	runtime := &Runtime{started: time.Now().UTC(), operations: make(map[model.RunID]model.Operation), Measurements: measurements, Groups: groups}
 	operation := model.NewOperation("commissioning", "benchmark-hull", "section-a", "carriage-1", runtime.started)
 	runtime.operations[operation.ID] = operation
 	coordinator := NewCoordinator(runtime)

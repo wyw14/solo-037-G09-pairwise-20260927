@@ -18,7 +18,7 @@ func TestMeasuredRunHTTPUsesOperatorEvidence(t *testing.T) {
 	}
 	server := NewRouter(runtime).Handler()
 	created := httptest.NewRecorder()
-	server.ServeHTTP(created, httptest.NewRequest(http.MethodPost, "/api/measured-runs", strings.NewReader(`{"name":"tow A","model_name":"hull A","section":"section-a","carriage":"carriage-1"}`)))
+	server.ServeHTTP(created, httptest.NewRequest(http.MethodPost, "/api/measured-runs", strings.NewReader(`{"name":"tow A","model_name":"hull A","section":"section-a","carriage":"carriage-1","tow_speed":1.25,"wave_condition":"calm","loading":"draft-0.3"}`)))
 	if created.Code != http.StatusOK {
 		t.Fatalf("create: %d %s", created.Code, created.Body)
 	}
@@ -31,6 +31,9 @@ func TestMeasuredRunHTTPUsesOperatorEvidence(t *testing.T) {
 	id := response.Data.Operation.ID
 	if id == "" {
 		t.Fatal("missing ID")
+	}
+	if !response.Data.Operation.Conditions.Configured() || response.Data.Operation.Conditions.TowSpeed != 1.25 {
+		t.Fatalf("conditions not echoed on create: %+v", response.Data.Operation.Conditions)
 	}
 	stamp := time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
 	input := `{"kind":"wave_time","source_id":"probe-a","value":0.24,"recorded_at":"` + stamp + `"}`

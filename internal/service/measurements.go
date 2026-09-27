@@ -30,6 +30,17 @@ type MeasurementInput struct {
 	RecordedAt time.Time          `json:"recorded_at"`
 }
 
+// CreateRunInput carries the identity fields and optional physical conditions
+// of a new measured tow. Conditions are optional but must be supplied as a
+// complete set: either all three fields or none.
+type CreateRunInput struct {
+	Name       string
+	ModelName  string
+	Section    string
+	Carriage   string
+	Conditions model.Conditions
+}
+
 type MeasurementAnalysis struct {
 	Operation  model.Operation `json:"operation"`
 	Wave       probe.Analysis  `json:"wave"`
@@ -75,42 +86,27 @@ func cloneMeasuredRun(value MeasuredRun) MeasuredRun {
 }
 
 func (a *MeasurementArchive) commit(next map[model.RunID]MeasuredRun) error {
-	if a.path != "" {
-		data, err := json.MarshalIndent(next, "", "  ")
-		if err != nil {
-			return err
-		}
-		file, err := os.CreateTemp(filepath.Dir(a.path), "measurements-*.tmp")
-		if err != nil {
-			return err
-		}
-		name := file.Name()
-		defer os.Remove(name)
-		if _, err = file.Write(data); err == nil {
-			err = file.Sync()
-		}
-		closeErr := file.Close()
-		if err != nil {
-			return err
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		if err := os.Rename(name, a.path); err != nil {
-			return err
-		}
+	if err := writeAtomicJSON(a.path, "measurements-*.tmp", next); err != nil {
+		return err
 	}
 	a.runs = next
 	return nil
 }
 
-func (a *MeasurementArchive) Create(name, modelName, section, carriage string) (MeasuredRun, error) {
-	if strings.TrimSpace(name) == "" || strings.TrimSpace(modelName) == "" || strings.TrimSpace(section) == "" || strings.TrimSpace(carriage) == "" {
+func (a *MeasurementArchive) Create(input CreateRunInput) (MeasuredRun, error) {
+	if strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.ModelName) == "" || strings.TrimSpace(input.Section) == "" || strings.TrimSpace(input.Carriage) == "" {
 		return MeasuredRun{}, errors.New("name, model, section and carriage are required")
+	}
+	conditions := input.Conditions.Normalized()
+	if math.IsNaN(conditions.TowSpeed) || math.IsInf(conditions.TowSpeed, 0) {
+		return MeasuredRun{}, errors.New("tow speed must be finite")
+	}
+	if conditions.PartiallyConfigured() {
+		return MeasuredRun{}, errors.New("conditions must be supplied together: tow_speed > 0, wave_condition and loading")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	operation := model.NewOperation(name, modelName, section, carriage, time.Now().UTC())
+	operation := model.NewOperation(input.Name, input.ModelName, input.Section, input.Carriage, time.Now().UTC()).WithConditions(conditions)
 	value := MeasuredRun{Operation: operation, Evidence: []model.Evidence{}}
 	next := make(map[model.RunID]MeasuredRun, len(a.runs)+1)
 	for id, run := range a.runs {
@@ -190,8 +186,8 @@ func (a *MeasurementArchive) Analyze(id model.RunID) (MeasurementAnalysis, error
 	return result, nil
 }
 
-func (r *Runtime) CreateMeasuredRun(name, modelName, section, carriage string) (MeasuredRun, error) {
-	return r.Measurements.Create(name, modelName, section, carriage)
+func (r *Runtime) CreateMeasuredRun(input CreateRunInput) (MeasuredRun, error) {
+	return r.Measurements.Create(input)
 }
 
 func (r *Runtime) RecordMeasurement(id model.RunID, input MeasurementInput) (model.Evidence, error) {

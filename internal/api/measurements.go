@@ -11,7 +11,7 @@ import (
 )
 
 type MeasurementService interface {
-	CreateMeasuredRun(name, modelName, section, carriage string) (service.MeasuredRun, error)
+	CreateMeasuredRun(service.CreateRunInput) (service.MeasuredRun, error)
 	RecordMeasurement(model.RunID, service.MeasurementInput) (model.Evidence, error)
 	MeasuredRuns() []service.MeasuredRun
 	MeasuredRun(model.RunID) (service.MeasuredRun, bool)
@@ -19,10 +19,13 @@ type MeasurementService interface {
 }
 
 type createMeasuredRunRequest struct {
-	Name      string `json:"name"`
-	ModelName string `json:"model_name"`
-	Section   string `json:"section"`
-	Carriage  string `json:"carriage"`
+	Name          string  `json:"name"`
+	ModelName     string  `json:"model_name"`
+	Section       string  `json:"section"`
+	Carriage      string  `json:"carriage"`
+	TowSpeed      float64 `json:"tow_speed"`
+	WaveCondition string  `json:"wave_condition"`
+	Loading       string  `json:"loading"`
 }
 
 func decodeMeasurementBody(request *http.Request, value any) error {
@@ -51,7 +54,13 @@ func (r *Router) createMeasuredRun(w http.ResponseWriter, request *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	value, err := r.dependencies.CreateMeasuredRun(input.Name, input.ModelName, input.Section, input.Carriage)
+	value, err := r.dependencies.CreateMeasuredRun(service.CreateRunInput{
+		Name:       input.Name,
+		ModelName:  input.ModelName,
+		Section:    input.Section,
+		Carriage:   input.Carriage,
+		Conditions: model.Conditions{TowSpeed: input.TowSpeed, WaveCondition: input.WaveCondition, Loading: input.Loading},
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

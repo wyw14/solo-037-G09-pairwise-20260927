@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WaveLab 试验组与一致性分析</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; margin: 0; background: #f4f5f7; color: #1f2933; }
+  header { background: #10334f; color: #fff; padding: 14px 20px; }
+  header h1 { margin: 0; font-size: 18px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 18px; }
+  section.card { background: #fff; border: 1px solid #d9dee3; border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border: 1px solid #d9dee3; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #eef1f4; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .muted { color: #7b8794; }
+  .unconfigured { color: #b25b00; font-style: italic; }
+  .diff { background: #fde2e2; outline: 2px solid #d64545; }
+  .missing { color: #b25b00; font-weight: 600; }
+  .common { font-weight: 700; }
+  .banner { padding: 10px 14px; border-radius: 6px; font-weight: 600; margin-bottom: 12px; }
+  .banner.ok { background: #d8f0dc; border: 1px solid #3a9d52; color: #1d5b2c; }
+  .banner.bad { background: #fde2e2; border: 1px solid #d64545; color: #8a1f1f; }
+  .blocker { background: #fdecec; border-left: 4px solid #d64545; padding: 7px 10px; margin: 6px 0; font-size: 13px; }
+  .advisory { background: #fff7e0; border-left: 4px solid #d99a18; padding: 7px 10px; margin: 6px 0; font-size: 13px; }
+  .blocker code, .advisory code { background: rgba(0,0,0,.06); padding: 0 4px; border-radius: 3px; }
+  button { background: #1769aa; color: #fff; border: 0; border-radius: 5px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+  button.secondary { background: #52606d; }
+  button:disabled { background: #9fb3c8; cursor: default; }
+  input[type=text] { padding: 6px 8px; border: 1px solid #b7c0c9; border-radius: 5px; font-size: 13px; min-width: 220px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .note { font-size: 12px; color: #52606d; margin-top: 6px; }
+  details { margin: 8px 0; }
+  summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+  .pill { display: inline-block; font-size: 11px; border-radius: 10px; padding: 1px 8px; background: #e4e7eb; color: #3e4c59; }
+</style>
+</head>
+<body>
+<header><h1>WaveLab 试验组与多次拖曳一致性分析</h1></header>
+<main>
+  <section class="card">
+    <h2>1. 选择拖曳运行</h2>
+    <div class="note">勾选同一船模、相同工况（航速/波况/载况、航段、拖车）的重复拖曳。工况未配置（<span class="unconfigured">橙色斜体</span>）的运行可以入组，但报告会阻断跨运行比较。</div>
+    <table id="runs-table">
+      <thead><tr>
+        <th></th><th>运行</th><th>船模</th><th>航段</th><th>拖车</th>
+        <th class="num">航速 m/s</th><th>波况</th><th>载况</th><th>阶段</th>
+        <th class="num">波高样本</th><th class="num">力值样本</th>
+      </tr></thead>
+      <tbody id="runs-body"><tr><td colspan="11" class="muted">加载中…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>2. 建立试验组</h2>
+    <div class="row">
+      <input type="text" id="group-name" placeholder="试验组名称，如 hull-A / 1.2m-s / 静水 / 重复3次">
+      <button id="create-group" disabled>用选中的 <span id="selected-count">0</span> 个运行建组</button>
+      <span id="create-msg" class="note"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>3. 已保存试验组</h2>
+    <div id="groups-list" class="muted">加载中…</div>
+  </section>
+
+  <section class="card" id="report-card" hidden>
+    <h2>4. 一致性报告 <button class="secondary" id="close-report" style="float:right">关闭</button></h2>
+    <div id="report"></div>
+  </section>
+</main>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const api = async (path, options) => {
+  const res = await fetch(path, options);
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch (_) { body = { raw: text }; }
+  if (!res.ok) throw new Error((body && (body.error || body.message)) || ('HTTP ' + res.status + ': ' + text));
+  return body && body.data !== undefined ? body.data : body;
+};
+const fmt = (v, digits) => (v == null ? '—' : Number(v).toFixed(digits));
+const ms = (v) => v == null ? '—' : (v >= 1000 ? (v / 1000).toFixed(1) + ' s' : v + ' ms');
+
+let runs = [];
+const selected = new Set();
+
+const FIELD_LABELS = {
+  model_name: '船模', section: '航段', carriage: '拖车',
+  tow_speed: '航速 (m/s)', wave_condition: '波况', loading: '载况'
+};
+const FORCE_LABEL = { wave_time: '波高探头', force: '力传感器' };
+
+function conditionText(op, field) {
+  if (field === 'model_name') return [op.model_name, true];
+  if (field === 'section') return [op.section, true];
+  if (field === 'carriage') return [op.carriage, true];
+  const c = op.conditions || {};
+  if (field === 'tow_speed') return [c.tow_speed > 0 ? c.tow_speed : null, c.tow_speed > 0];
+  if (field === 'wave_condition') return [c.wave_condition || null, !!(c.wave_condition && c.wave_condition.trim())];
+  if (field === 'loading') return [c.loading || null, !!(c.loading && c.loading.trim())];
+  return [null, false];
+}
+
+function countEvidence(run, kind) {
+  return (run.evidence || []).filter((e) => e.kind === kind).length;
+}
+
+async function loadRuns() {
+  runs = await api('/api/measured-runs');
+  const body = $('runs-body');
+  if (!runs.length) {
+    body.innerHTML = '<tr><td colspan="11" class="muted">尚无测量运行。</td></tr>';
+    return;
+  }
+  body.innerHTML = runs.map((run) => {
+    const op = run.operation, c = op.conditions || {};
+    const cell = (value) => value
+      ? esc(value) : '<span class="unconfigured">未配置</span>';
+    return '<tr>' +
+      '<td><input type="checkbox" data-id="' + esc(op.id) + '"' + (selected.has(op.id) ? ' checked' : '') + '></td>' +
+      '<td>' + esc(op.name) + '<div class="muted" style="font-size:11px">' + esc(op.id.slice(0,8)) + '</div></td>' +
+      '<td>' + esc(op.model_name) + '</td>' +
+      '<td>' + esc(op.section) + '</td>' +
+      '<td>' + esc(op.carriage) + '</td>' +
+      '<td class="num">' + (c.tow_speed > 0 ? esc(c.tow_speed) : '<span class="unconfigured">未配置</span>') + '</td>' +
+      '<td>' + cell(c.wave_condition) + '</td>' +
+      '<td>' + cell(c.loading) + '</td>' +
+      '<td><span class="pill">' + esc(op.stage) + '</span></td>' +
+      '<td class="num">' + countEvidence(run, 'wave_time') + '</td>' +
+      '<td class="num">' + countEvidence(run, 'force') + '</td>' +
+    '</tr>';
+  }).join('');
+  body.querySelectorAll('input[type=checkbox]').forEach((box) => {
+    box.addEventListener('change', () => {
+      if (box.checked) selected.add(box.dataset.id); else selected.delete(box.dataset.id);
+      updateSelection();
+    });
+  });
+  updateSelection();
+}
+
+function updateSelection() {
+  $('selected-count').textContent = selected.size;
+  $('create-group').disabled = selected.size < 2;
+}
+
+async function createGroup() {
+  const name = $('group-name').value.trim();
+  $('create-msg').textContent = '';
+  if (!name) { $('create-msg').textContent = '请填写试验组名称。'; return; }
+  try {
+    await api('/api/trial-groups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, run_ids: [...selected] })
+    });
+    $('group-name').value = '';
+    await loadGroups();
+    $('create-msg').textContent = '已保存。';
+  } catch (err) {
+    $('create-msg').textContent = '建组失败：' + err.message;
+  }
+}
+
+async function loadGroups() {
+  const groups = await api('/api/trial-groups');
+  const box = $('groups-list');
+  if (!groups.length) { box.innerHTML = '<span class="muted">尚未建立试验组。</span>'; return; }
+  box.innerHTML = groups.map((g) =>
+    '<div class="row" style="justify-content:space-between; margin:6px 0">' +
+      '<span>' + esc(g.name) + ' <span class="pill">' + g.run_ids.length + ' 个运行</span> ' +
+      '<span class="muted">' + new Date(g.created_at).toLocaleString() + '</span></span>' +
+      '<span><button data-open="' + esc(g.id) + '">打开报告</button></span>' +
+    '</div>').join('');
+  box.querySelectorAll('button[data-open]').forEach((btn) =>
+    btn.addEventListener('click', () => openReport(btn.dataset.open)));
+}
+
+function nameOf(id) {
+  const run = runs.find((r) => r.operation.id === id);
+  return run ? run.operation.name : String(id).slice(0, 8);
+}
+
+async function openReport(id) {
+  const report = await api('/api/trial-groups/' + id + '/consistency');
+  $('report-card').hidden = false;
+  $('report').innerHTML = renderReport(report);
+  $('report-card').scrollIntoView({ behavior: 'smooth' });
+}
+
+function renderReport(r) {
+  const cols = r.condition_table;
+  let html = '';
+
+  html += '<div class="banner ' + (r.comparable ? 'ok' : 'bad') + '">' +
+    (r.comparable ? '✓ 工况一致，可比较重复性（各源/各运行对的指标见下，不存在单一平均分）'
+                  : '✗ 不能直接比较：存在阻断条件，请先处理下列差异') + '</div>';
+
+  if (r.blockers.length) {
+    html += '<div><strong>阻断原因</strong>' + r.blockers.map((b) =>
+      '<div class="blocker"><code>' + esc(b.code) + '</code> ' + esc(b.message) +
+      (b.run_id ? ' <span class="muted">(' + esc(nameOf(b.run_id)) + ')</span>' : '') + '</div>').join('') + '</div>';
+  }
+  if (r.advisories.length) {
+    html += '<div style="margin-top:8px"><strong>提示（不阻断）</strong>' + r.advisories.map((a) =>
+      '<div class="advisory"><code>' + esc(a.code) + '</code> ' + esc(a.message) +
+      (a.run_id ? ' <span class="muted">(' + esc(nameOf(a.run_id)) + (a.source ? ' / ' + esc(a.source) : '') + ')</span>' : '') + '</div>').join('') + '</div>';
+  }
+
+  // Condition table: rows = six fields, columns = runs.
+  const diffFields = new Set(r.condition_differences.map((d) => d.field));
+  html += '<details open><summary>工况对照（差异单元格红色高亮）</summary><table><thead><tr><th>字段</th>' +
+    cols.map((col) => '<th>' + esc(col.name) + '<div class="muted" style="font-weight:400;font-size:11px">' + esc(col.stage) + '</div></th>').join('') +
+    '</tr></thead><tbody>';
+  for (const field of ['model_name','section','carriage','tow_speed','wave_condition','loading']) {
+    html += '<tr><th>' + FIELD_LABELS[field] + '</th>';
+    for (const col of cols) {
+      const [value, configured] = conditionText(col, field);
+      const cls = (diffFields.has(field) ? 'diff ' : '') + (configured ? '' : 'unconfigured');
+      const text = value == null ? '未配置' : String(value);
+      html += '<td class="' + cls + '">' + esc(text) + '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table></details>';
+
+  // Coverage matrix.
+  html += renderCoverage(r.coverage, 'wave_time', '波高证据覆盖') +
+          renderCoverage(r.coverage, 'force', '力值证据覆盖');
+
+  // Pairwise metrics.
+  html += renderMetrics(r.wave, '波高形态逐对比较（时间各自归一化到 [0,1]，101 点重采样）') +
+          renderMetrics(r.force, '力值逐对比较');
+
+  // Per-run summaries.
+  html += '<details><summary>各运行单独统计（始终展示）</summary><table><thead><tr>' +
+    '<th>运行</th><th>阶段</th><th class="num">波高 n</th><th class="num">波高均值</th><th class="num">波高 RMS</th>' +
+    '<th class="num">力值 n</th><th class="num">力值均值</th><th class="num">力值标准差</th></tr></thead><tbody>' +
+    r.run_summaries.map((s) => '<tr><td>' + esc(s.name) + '</td><td>' + esc(s.stage) + '</td>' +
+      '<td class="num">' + s.wave_count + '</td><td class="num">' + fmt(s.wave_mean, 4) + '</td><td class="num">' + fmt(s.wave_rms, 4) + '</td>' +
+      '<td class="num">' + s.force_count + '</td><td class="num">' + fmt(s.force_mean, 4) + '</td><td class="num">' + fmt(s.force_std, 4) + '</td></tr>').join('') +
+    '</tbody></table></details>';
+
+  return html;
+}
+
+function renderCoverage(cov, kind, title) {
+  const sources = kind === 'wave_time' ? cov.wave_sources : cov.force_sources;
+  const common = new Set(kind === 'wave_time' ? cov.common_wave_sources : cov.common_force_sources);
+  let html = '<details open><summary>' + title + '（共同源加粗；缺口指最大采样间隔 &gt; 2×中位间隔）</summary>';
+  if (!sources.length) { html += '<div class="muted">无' + FORCE_LABELS[kind] + '证据。</div></details>'; return html; }
+  html += '<table><thead><tr><th>源</th>' + cov.runs.map((run) => '<th>' + esc(run.name) + '</th>').join('') + '</tr></thead><tbody>';
+  for (const source of sources) {
+    html += '<tr><td class="' + (common.has(source) ? 'common' : '') + '">' + esc(source) +
+      (common.has(source) ? ' <span class="pill">共同</span>' : '') + '</td>';
+    for (const run of cov.runs) {
+      const cells = kind === 'wave_time' ? run.wave : run.force;
+      const cell = cells.find((c) => c.source_id === source);
+      if (!cell || !cell.present) {
+        html += '<td class="missing">— 缺失</td>';
+      } else {
+        html += '<td>✓ n=' + cell.count + '，跨度 ' + ms(cell.span_ms) +
+          (cell.gap.gapped ? ' <span class="missing">缺口!</span>' : '') + '</td>';
+      }
+    }
+    html += '</tr>';
+  }
+  return html + '</tbody></table></details>';
+}
+
+function renderMetrics(sections, title) {
+  let html = '<details open><summary>' + title + '</summary>';
+  if (!sections.length) { html += '<div class="muted">（工况阻断或无此类共同源时不产出跨运行指标）</div></details>'; return html; }
+  for (const section of sections) {
+    html += '<table style="margin:8px 0"><thead><tr><th colspan="8">' + FORCE_LABELS[sections[0].kind] + '：' + esc(section.source) + '</th></tr>' +
+      '<tr><th>运行对</th><th class="num">Pearson r</th><th class="num">NRMSD</th><th class="num">均值差</th>' +
+      '<th class="num">RMS 差</th><th class="num">std A</th><th class="num">std B</th><th>状态</th></tr></thead><tbody>';
+    for (const p of section.pairs) {
+      const m = p.metrics;
+      const statusNote = {
+        ok: '', scalar: '标量（各单点，仅均值差有效）', missing_source: '一侧缺失该源',
+        insufficient_sample: '样本不足', zero_span: '时间跨度为零',
+        undefined_zero_variance: '零方差，相关系数无定义', undefined_zero_amplitude: '零幅值，NRMSD 无定义'
+      }[m.status] || m.status;
+      html += '<tr><td>' + esc(nameOf(p.run_a)) + ' ↔ ' + esc(nameOf(p.run_b)) + '</td>' +
+        '<td class="num">' + (m.pearson == null ? '—' : fmt(m.pearson, 4)) + '</td>' +
+        '<td class="num">' + (m.nrmsd == null ? '—' : fmt(m.nrmsd, 4)) + '</td>' +
+        '<td class="num">' + (m.mean_delta == null ? '—' : fmt(m.mean_delta, 4)) + '</td>' +
+        '<td class="num">' + (m.rms_delta == null ? '—' : fmt(m.rms_delta, 4)) + '</td>' +
+        '<td class="num">' + (m.std_a == null ? '—' : fmt(m.std_a, 4)) + '</td>' +
+        '<td class="num">' + (m.std_b == null ? '—' : fmt(m.std_b, 4)) + '</td>' +
+        '<td class="' + (m.status === 'ok' ? 'muted' : 'missing') + '">' + esc(statusNote) + '</td></tr>';
+    }
+    html += '</tbody></table>';
+  }
+  return html + '</details>';
+}
+
+$('create-group').addEventListener('click', createGroup);
+$('close-report').addEventListener('click', () => { $('report-card').hidden = true; });
+
+(async function init() {
+  try {
+    await loadRuns();
+    await loadGroups();
+  } catch (err) {
+    $('runs-body').innerHTML = '<tr><td colspan="11" class="missing">加载失败：' + esc(err.message) + '</td></tr>';
+  }
+})();
+</script>
+</body>
+</html>
